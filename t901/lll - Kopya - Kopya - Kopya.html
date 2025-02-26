@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <link rel="icon" type="image/png" href="/C:\Users\vivi7\OneDrive\Masaüstü\t901/favicon-96x96.png" sizes="96x96" />
+  <link rel="icon" type="image/svg+xml" href="/C:\Users\vivi7\OneDrive\Masaüstü\t901/favicon.svg" />
+  <link rel="shortcut icon" href="/C:\Users\vivi7\OneDrive\Masaüstü\t901/favicon.ico" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/C:\Users\vivi7\OneDrive\Masaüstü\t901/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-title" content="MyWebSite" />
+  <link rel="manifest" href="/C:\Users\vivi7\OneDrive\Masaüstü\t901/site.webmanifest" />
+  <link rel="manifest" href="manifest.json">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>t901 - MP3</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.0/lame.min.js"></script>
+</head>
+<body>
+  <h1>t901 - MP3</h1>
+  <input type="text" id="metin" placeholder="Metni yazın..." />
+  <button id="playButton" onclick="playSequence()">Çal</button>
+  <button id="saveButton" onclick="saveRecording()" disabled>Kaydet</button>
+  
+  <script>
+    const harf_frekans = {
+      'a': 44, 'b': 46, 'c': 49, 'd': 52, 'e': 55, 'f': 58, 'g': 62, 'h': 65,
+      'i': 69, 'j': 74, 'k': 78, 'l': 83, 'm': 88, 'n': 93, 'o': 98, 'p': 104,
+      'q': 110, 'r': 117, 's': 124, 't': 131, 'u': 139, 'v': 148, 'w': 156, 'x': 166,
+      'y': 176, 'z': 186
+    };
+
+    let audioContext;
+    let masterGain;
+    let scriptProcessor;
+    let recordedBuffers = [];
+    let recording = false;
+    let sampleRate;
+
+    function initAudio() {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      sampleRate = audioContext.sampleRate;
+      masterGain = audioContext.createGain();
+      masterGain.connect(audioContext.destination);
+
+      scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+      scriptProcessor.onaudioprocess = function(event) {
+        if (!recording) return;
+        const channelData = event.inputBuffer.getChannelData(0);
+        recordedBuffers.push(new Float32Array(channelData));
+      };
+      masterGain.connect(scriptProcessor);
+      scriptProcessor.connect(audioContext.destination);
+    }
+
+    function playSequence() {
+      recordedBuffers = [];
+      recording = true;
+      document.getElementById("saveButton").disabled = true;
+      
+      if (!audioContext) {
+        initAudio();
+      }
+      
+      const metin = document.getElementById('metin').value.toLowerCase();
+      let startTime = audioContext.currentTime;
+      
+      const preDuration = 0.4;
+      let oscPre = audioContext.createOscillator();
+      oscPre.type = 'sine';
+      oscPre.frequency.setValueAtTime(35, startTime);
+      oscPre.connect(masterGain);
+      oscPre.start(startTime);
+      oscPre.stop(startTime + preDuration);
+      
+      const letterDuration = 0.1;
+      let t = startTime + preDuration;
+      for (let i = 0; i < metin.length; i++) {
+        const harf = metin[i];
+        if (harf_frekans[harf]) {
+          let freq = harf_frekans[harf];
+          let osc = audioContext.createOscillator();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, t);
+          osc.connect(masterGain);
+          osc.start(t);
+          osc.stop(t + letterDuration);
+          t += letterDuration;
+        }
+      }
+      
+      const postDuration = 0.4;
+      let oscPost = audioContext.createOscillator();
+      oscPost.type = 'sine';
+      oscPost.frequency.setValueAtTime(35, t);
+      oscPost.connect(masterGain);
+      oscPost.start(t);
+      oscPost.stop(t + postDuration);
+      
+      setTimeout(() => {
+        recording = false;
+        document.getElementById("saveButton").disabled = false;
+      }, ((t + postDuration) - audioContext.currentTime) * 1000 + 100);
+    }
+
+    function mergeBuffers(bufferArray, recLength) {
+      let result = new Float32Array(recLength);
+      let offset = 0;
+      for (let i = 0; i < bufferArray.length; i++) {
+        result.set(bufferArray[i], offset);
+        offset += bufferArray[i].length;
+      }
+      return result;
+    }
+
+    function floatTo16BitPCM(floatBuffer) {
+      let output = new Int16Array(floatBuffer.length);
+      for (let i = 0; i < floatBuffer.length; i++) {
+        let s = Math.max(-1, Math.min(1, floatBuffer[i]));
+        output[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      return output;
+    }
+
+    function saveRecording() {
+      let recLength = recordedBuffers.reduce((acc, cur) => acc + cur.length, 0);
+      let merged = mergeBuffers(recordedBuffers, recLength);
+      let pcmData = floatTo16BitPCM(merged);
+
+      const channels = 1;
+      const kbps = 128;
+      const mp3encoder = new lamejs.Mp3Encoder(channels, sampleRate, kbps);
+      const blockSize = 1152;
+      let mp3Data = [];
+      
+      for (let i = 0; i < pcmData.length; i += blockSize) {
+        let sampleChunk = pcmData.subarray(i, i + blockSize);
+        let mp3buf = mp3encoder.encodeBuffer(sampleChunk);
+        if (mp3buf.length > 0) {
+          mp3Data.push(mp3buf);
+        }
+      }
+      let mp3buf = mp3encoder.flush();
+      if (mp3buf.length > 0) {
+        mp3Data.push(mp3buf);
+      }
+      
+      let blob = new Blob(mp3Data, { type: 'audio/mp3' });
+      let url = URL.createObjectURL(blob);
+      let a = document.createElement('a');
+      a.href = url;
+      a.download = 'recording.mp3';
+      a.click();
+    }
+  </script>
+</body>
+</html>
